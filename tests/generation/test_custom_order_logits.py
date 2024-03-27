@@ -1,6 +1,7 @@
 import copy
 from inspect import signature
 import random
+import types
 
 import torch
 from torch import nn
@@ -24,6 +25,17 @@ PROCESSORS = (
     TopKLogitsWarper,
     TopPLogitsWarper,
 )
+
+
+def verbosify(obj):
+    old_call = obj.__call__
+    def wrapped_call(*args, **kargs):
+        print(obj.__name__)
+        old_call(*args, **kargs)
+    obj.__call__ = wrapped_call
+    return obj
+
+
 
 #I feel like this should be more easily doable with param or something like that?
 class Parameterization:
@@ -332,7 +344,10 @@ class TopALogitsWarper(LogitsWarper):
         return scores
 
 
-def OVERRIDE_get_logits_warper(
+# looks like the current implementation of GenerationMixin leverages a very different method which also has a very different signature.
+# see ._get_logits_processor()
+
+def _old_OVERRIDE_get_logits_warper(
         self, top_k: int = None, top_p: float = None, top_a: float = None,
         tfs: float = None, temperature: float = None,
         typical_p: float = None,
@@ -396,12 +411,17 @@ def OVERRIDE_get_logits_warper(
 
     # this is insanity and I don't like it.
     # can we just do this with enums instead?
+    print("hi there")
     if order is not None and len(order) == 6 and all(
             [x in order for x in (0, 1, 2, 3, 4, 5)]):
         reordered = []
         for i in order:
-            reordered.append(warpers[i])
+            w = warpers[i]
+            w = verbosify(w)
+            reordered.append(w)
         warpers = reordered
+    else:
+        print("order not received")
 
     warpers = list(filter(lambda x: x is not None, warpers))
 
@@ -411,6 +431,74 @@ def OVERRIDE_get_logits_warper(
 
     return lpl
 
+###########################################################################################
+
+# We can have an "order" tuple coming in from the servicer, but I want the solution on this end
+# to support arbitrary processors. Let's do this:
+    # 1. assume some kind of default "processor priority" for all processors
+    # 2. allow users to pass in a custom priority mapping
+    # 3. after collecting all processors into the LogitsProceessorList, ensure the mapping is satisfied
+# one benefit of this approach will be that we can just call  super()._get_logits_processor and
+# slap this extra step on after
+
+
+def OVERRIDE_get_logits_processor(
+    self,
+    generation_config, #: GenerationConfig,
+    input_ids_seq_length, #: int,
+    encoder_input_ids, #: torch.LongTensor,
+    prefix_allowed_tokens_fn, #: Callable[[int, torch.Tensor], List[int]],
+    logits_processor=None, #: Optional[LogitsProcessorList],
+    model_kwargs=None, #: Optional[Dict[str, Any]] = None,
+    negative_prompt_ids=None, #: Optional[torch.Tensor] = None,
+    negative_prompt_attention_mask=None, #: Optional[torch.Tensor] = None,
+) -> LogitsProcessorList:
+    processors = self._OLD_get_logits_processor(
+        generation_config=generation_config,
+        input_ids_seq_length=input_ids_seq_length,
+        encoder_input_ids=encoder_input_ids,
+        prefix_allowed_tokens_fn=prefix_allowed_tokens_fn,
+        logits_processor=logits_processor,
+        model_kwargs=model_kwargs,
+        negative_prompt_ids=negative_prompt_ids,
+        negative_prompt_attention_mask=negative_prompt_attention_mask,
+    )
+    # todo: backfill custom processors here
+    # ...
+    # ... actually this might not even be necessary? it looks like OVERRIDE_get_logits_warper is actually being called
+
+    if 'order' in model_kwargs:
+        print("applying an ordering")
+        processors = order_processors(processors, **model_kwargs)
+    else:
+        print("for real? wtf are those model args...")
+        print(model_kwargs)
+    return processors
+
+def OVERRIDE_get_logits_warper(
+        self,
+        generation_config, #: GenerationConfig,
+    ) -> LogitsProcessorList:
+    processors = self._OLD_get_logits_warper(generation_config=generation_config)
+    print(f"generation_config: {generation_config}")
+    return processors
+
+
+
+def get_processor_priority(processor, priority: dict, default=500):
+    pname = processor.__name__
+    outv = priority.get(pname, default)
+    print((pname, outv))
+    return outv
+
+def order_processors(processors, **kargs):
+    default_priority=500
+    prioritized = []
+    for proc in processors:
+        rec = (proc, get_processor_priority(proc, kwargs['order']))
+        prioritized.append(rec)
+        default_priority += 1 # to conserve huggingface-provided ordering when unspecified in case it's important
+    return LogitsProcessorList([item[0] for item in sorted(prioritized, key=lambda x: x[1])])
 
 class TestClassOverride:
     """
@@ -447,12 +535,21 @@ class TestClassOverride:
     def test_method_override(self):
         model_name = "mistralai/Mistral-7b-v0.1" #"EleutherAI/pythia-160m-deduped" # "hf-internal-testing/tiny-random-gpt2"  # "EleutherAI/pythia-160m-deduped"
         model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(torch_device)
-        model._get_logits_warper = OVERRIDE_get_logits_warper # godspeed 🫡
+        #model._get_logits_warper = OVERRIDE_get_logits_warper # godspeed 🫡
+        model._OLD_get_logits_warper = model._get_logits_warper
+        model._get_logits_warper = types.MethodType(OVERRIDE_get_logits_warper, model)
+
         model._validate_model_kwargs = lambda x: True
+
+        # hmmm
+        # apparently monkeypatching is non-trivial because of inco
+        model._OLD_get_logits_processor = model._get_logits_processor
+        # This is to correctly bind "self"
+        model._get_logits_processor = types.MethodType(OVERRIDE_get_logits_processor, model)
 
         input_ids = ids_tensor((1, 5), vocab_size=model.config.vocab_size).to(torch_device)
 
-        ORDER = (0,1,2,3,4,5)
+        #ORDER = (0,1,2,3,4,5)
 
         seed = random.randint(0, int(1e9))
         torch.manual_seed(seed)
@@ -466,7 +563,8 @@ class TestClassOverride:
             #top_k = 5,
             top_p =0.7,
             temperature = 0.7,
-            order=ORDER
+            #order=ORDER
+            order = {'TemperatureLogitsWarper':0}
         )
 
         torch.manual_seed(seed)
@@ -480,7 +578,8 @@ class TestClassOverride:
             #top_k=5,
             top_p=0.7,
             temperature=0.7,
-            order = ORDER[::-1]
+            #order = ORDER[::-1]
+            order={'TemperatureLogitsWarper': 1000}
         )
 
         #print(outv0.scores[0].shape) #torch.Size([1, 32000])
