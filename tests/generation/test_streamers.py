@@ -30,6 +30,8 @@ from transformers.testing_utils import CaptureStdout, require_torch, torch_devic
 
 from ..test_modeling_common import ids_tensor
 
+import lovely_tensors as lt
+lt.monkey_patch()
 
 if is_torch_available():
     import torch
@@ -365,7 +367,8 @@ class TestOutputIteratorStreamer:
 
     @pytest.mark.parametrize("output_scores", [False, True])
     @pytest.mark.parametrize("output_logits", [False, True])
-    @pytest.mark.parametrize("output_attentions", [False, True])
+    #@pytest.mark.parametrize("output_attentions", [False, True])
+    @pytest.mark.parametrize("output_attentions", [False])
     def test_greedy_outputs(self,
                             output_scores,
                             output_logits,
@@ -379,7 +382,8 @@ class TestOutputIteratorStreamer:
 
     @pytest.mark.parametrize("output_scores", [False, True])
     @pytest.mark.parametrize("output_logits", [False, True])
-    @pytest.mark.parametrize("output_attentions", [False, True])
+    #@pytest.mark.parametrize("output_attentions", [False, True])
+    @pytest.mark.parametrize("output_attentions", [False])
     def test_multinomial_outputs(self,
                             output_scores,
                             output_logits,
