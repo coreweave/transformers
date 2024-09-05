@@ -225,3 +225,7 @@ class TextIteratorStreamer(TextStreamer):
             raise StopIteration()
         else:
             return value
+
+
+class OutputIteratorStreamer:
+    pass

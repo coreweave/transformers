@@ -17,6 +17,14 @@ import unittest
 from queue import Empty
 from threading import Thread
 
+from collections import Counter
+import copy
+import random
+import unittest
+import pytest
+
+from transformers.generation.streamers import OutputIteratorStreamer
+
 from transformers import AutoTokenizer, TextIteratorStreamer, TextStreamer, is_torch_available
 from transformers.testing_utils import CaptureStdout, require_torch, torch_device
 
