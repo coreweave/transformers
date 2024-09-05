@@ -3036,7 +3036,19 @@ class GenerationMixin:
             # update generated ids, model inputs, and length for next step
             input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
             if streamer is not None:
-                streamer.put(next_tokens.cpu())
+                output_stub = self._prepare_output(
+                    return_dict_in_generate=return_dict_in_generate,
+                    sequences=next_tokens,
+                    scores=(next_token_scores,),
+                    logits=(next_token_logits,),
+                    encoder_attentions=None,
+                    encoder_hidden_states=None,
+                    decoder_attentions=(next_decoder_attentions,),
+                    cross_attentions=(next_cross_attentions,),
+                    decoder_hidden_states=(next_decoder_hidden_states,),
+                    past_key_values=None,
+                )
+                streamer.put(output_stub)
             model_kwargs = self._update_model_kwargs_for_generation(
                 outputs,
                 model_kwargs,
