@@ -1885,7 +1885,12 @@ class GenerationMixin:
             input_ids = self.heal_tokens(input_ids, tokenizer)
 
         if streamer is not None:
-            streamer.put(input_ids.cpu())
+            output_stub = self._prepare_output(
+                return_dict_in_generate=generation_config.return_dict_in_generate,
+                sequences=input_ids,
+                # no scores/logits/attention/hidden here because they haven't been computed yet.
+            )
+            streamer.put(output_stub)
 
         # 6. Prepare `max_length` depending on other stopping criteria.
         input_ids_length = input_ids.shape[-1]
