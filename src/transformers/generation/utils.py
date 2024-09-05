@@ -2955,6 +2955,10 @@ class GenerationMixin:
         cross_attentions = () if (return_dict_in_generate and output_attentions) else None
         decoder_hidden_states = () if (return_dict_in_generate and output_hidden_states) else None
 
+        # initialize variables for self._prepare_output(...)
+        encoder_attentions = encoder_hidden_states = None
+        next_decoder_attentions = next_cross_attentions = next_decoder_hidden_states = None
+
         # if model is an encoder-decoder, retrieve encoder attention weights and hidden states
         if return_dict_in_generate and self.config.is_encoder_decoder:
             encoder_attentions = model_kwargs["encoder_outputs"].get("attentions") if output_attentions else None
@@ -3045,30 +3049,18 @@ class GenerationMixin:
         if streamer is not None:
             streamer.end()
 
-        if return_dict_in_generate:
-            if self.config.is_encoder_decoder:
-                return GenerateEncoderDecoderOutput(
-                    sequences=input_ids,
-                    scores=scores,
-                    logits=raw_logits,
-                    encoder_attentions=encoder_attentions,
-                    encoder_hidden_states=encoder_hidden_states,
-                    decoder_attentions=decoder_attentions,
-                    cross_attentions=cross_attentions,
-                    decoder_hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
-                )
-            else:
-                return GenerateDecoderOnlyOutput(
-                    sequences=input_ids,
-                    scores=scores,
-                    logits=raw_logits,
-                    attentions=decoder_attentions,
-                    hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
-                )
-        else:
-            return input_ids
+        return self._prepare_output(
+            return_dict_in_generate=return_dict_in_generate,
+            sequences=input_ids,
+            scores=scores,
+            logits=raw_logits,
+            encoder_attentions=encoder_attentions,
+            encoder_hidden_states=encoder_hidden_states,
+            decoder_attentions=decoder_attentions,
+            cross_attentions=cross_attentions,
+            decoder_hidden_states=decoder_hidden_states,
+            past_key_values=model_kwargs.get("past_key_values")
+        )
 
     def _temporary_reorder_cache(self, past_key_values, beam_idx):
         """
