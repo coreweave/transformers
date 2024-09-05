@@ -16,6 +16,7 @@
 from queue import Queue
 from typing import TYPE_CHECKING, Optional
 
+# from transformers.generation.utils import (GenerateDecoderOnlyOutput, GenerateEncoderDecoderOutput)
 
 if TYPE_CHECKING:
     from ..models.auto import AutoTokenizer
@@ -227,5 +228,106 @@ class TextIteratorStreamer(TextStreamer):
             return value
 
 
-class OutputIteratorStreamer:
-    pass
+class OutputStreamer(BaseStreamer):
+    """
+    Streams Output objects
+    """
+    def __init__(self,
+                 filter_func=None,
+                 cache = None,
+    ):
+        if filter_func is None:
+            filter_func = self._filter_func
+        self.filter_func = filter_func
+        if cache is None:
+            cache = []
+        self.cache = cache # incoming unprocessed outputs
+
+    def _filter_func(self, value):
+        """
+        Class-default behavior for self.filter_func.
+        self.filter_func will be called on each incoming value. Can be used to filter the stream to a particular
+        attribute on the value object, or to limit the stream to values meeting certain criteria.
+        """
+        return value
+
+    def process_incoming_value(self, value):
+        """
+        Called on each incoming value
+        """
+        return self.filter_func(value)
+
+    def is_ready(self):
+        """
+        Test whether the buffer is ready
+        """
+        return len(self.cache) > 1
+
+    def on_ready(self):
+        """
+        When the buffer is ready, flush it and do something with the values it was holding
+        """
+        if len(self.cache) > 1:
+            values = self.cache[:]
+        elif len(self.cache) == 1:
+            values = self.cache[0]
+            values = [values] # put it in a list to be consistent
+        else:
+            raise ValueError("on_ready() called on an empty buffer. This should not happen. Report this error.")
+        self.cache = []
+        return self.process_outgoing_values(values)
+
+    def process_outgoing_values(self, values):
+        """
+        What to do with the values that were previously in the buffer
+        """
+        return values
+
+    def put(self, value):
+        value = self.process_incoming_value(value)
+        if value is not None:
+            if isinstance(value, list):
+                self.cache.extend(value)
+            else:
+                self.cache.append(value)
+
+        if self.is_ready():
+            return self.on_ready()
+
+
+class OutputIteratorStreamer(OutputStreamer):
+    def __init__(self,
+                 filter_func=None,
+                 cache = None,
+                 queue=None,
+                 timeout: Optional[float] = None,
+    ):
+        super().__init__(filter_func=filter_func, cache=cache)
+        if queue is None:
+           queue = Queue()
+        self.queue = queue # outgoing finalized outputs
+        self.timeout = timeout
+        self.stop_signal = None
+
+    def process_outgoing_values(self, values):
+        """
+        What to do with the values that were previously in the buffer
+        """
+        self.queue.put(values)
+
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        value = self.queue.get(timeout=self.timeout)
+        if value == self.stop_signal:
+            raise StopIteration()
+        else:
+            return value
+
+    def end(self):
+        # flush the cache if there's anything in it
+        if self.cache:
+            self.on_ready()
+        self.queue.put(self.stop_signal)
